@@ -70,3 +70,31 @@ class AccessLog(CommonAccess):
 
     def __unicode__(self):
         return six.u('Access Log for %s @ %s') % (self.username, self.attempt_time)
+
+
+class WhitelistedIP(models.Model):
+    """ WhitelistedIP
+
+    Just an IP address
+    """
+    ip_address = models.IPAddressField(
+        verbose_name='IP Address',
+        null=False,
+    )
+
+    def __unicode__(self):
+        return six.u('Whitelisted Address: %s') % self.ip_address
+
+
+class BlacklistedIP(models.Model):
+    """ WhitelistedIP
+
+    Just an IP address
+    """
+    ip_address = models.IPAddressField(
+        verbose_name='IP Address',
+        null=False,
+    )
+
+    def __unicode__(self):
+        return six.u('Whitelisted Address: %s') % self.ip_address

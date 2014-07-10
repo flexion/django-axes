@@ -163,3 +163,27 @@ class AccessAttemptTest(TestCase):
 
         # Make a login attempt again
         self.test_valid_login()
+
+    def test_whitelist(self):
+        """Tests if user can still visit site while banned
+        """
+
+        # Set whitelist = localhost
+
+        long_user_agent = 'ie6' * 1024
+        for i in range(0, FAILURE_LIMIT + 1):
+            response = self._login(user_agent=long_user_agent)
+
+        self.assertNotContains(response, self.LOCKED_MESSAGE)
+
+    def test_blacklist(self):
+        """Tests if user can still visit site while banned
+        """
+
+        # Set blacklist = localhost
+
+        long_user_agent = 'ie6' * 1024
+        for i in range(0, FAILURE_LIMIT + 1):
+            response = self._login(user_agent=long_user_agent)
+
+        self.assertNotContains(response, self.LOCKED_MESSAGE)

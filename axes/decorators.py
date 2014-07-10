@@ -26,78 +26,83 @@ except ImportError: # django >= 1.7
 
 from axes.models import AccessLog
 from axes.models import AccessAttempt
+from axes.models import WhitelistedIP
+from axes.models import BlacklistedIP
 from axes.signals import user_locked_out
 import axes
 from django.utils import six
 
 
-# see if the user has overridden the failure limit
-FAILURE_LIMIT = getattr(settings, 'AXES_LOGIN_FAILURE_LIMIT', 3)
+"""
+AXES_LOGIN_FAILURE_LIMIT
+AXES_LOCK_OUT_AT_FAILURE
+AXES_USE_USER_AGENT
+AXES_BEHIND_REVERSE_PROXY
+AXES_BEHIND_REVERSE_PROXY_WITH_DIRECT_ACCESS
+AXES_REVERSE_PROXY_HEADER
+AXES_COOLOFF_TIME
+AXES_LOGGER
+AXES_LOCKOUT_TEMPLATE
+AXES_VERBOSE
+AXES_ONLY_ALLOW_WHITELIST
+"""
 
-# see if the user has set axes to lock out logins after failure limit
-LOCK_OUT_AT_FAILURE = getattr(settings, 'AXES_LOCK_OUT_AT_FAILURE', True)
+CONF = {
+    'LOGIN_FAILURE_LIMIT': 3,
+    'LOCK_OUT_AT_FAILURE': True,
+    'LOCKOUT_URL': None,
+    'USE_USER_AGENT': False,
+    'BEHIND_REVERSE_PROXY': False,
+    'BEHIND_REVERSE_PROXY_WITH_DIRECT_ACCESS': False,
+    'REVERSE_PROXY_HEADER': 'HTTP_X_FORWARDED_FOR',
+    'COOLOFF_TIME': None,
+    'LOGGER': 'axes.watch_login',
+    'LOCKOUT_TEMPLATE': None,
+    'VERBOSE': True,
+    'ONLY_ALLOW_WHITELIST': False,
+}
 
-USE_USER_AGENT = getattr(settings, 'AXES_USE_USER_AGENT', False)
+# Pull config from settings
+CONF.update(getattr(settings, 'AXES_CONFIG', {}))
 
-# see if the django app is sitting behind a reverse proxy
-BEHIND_REVERSE_PROXY = getattr(settings, 'AXES_BEHIND_REVERSE_PROXY', False)
-
-# see if the django app is sitting behind a reverse proxy but can be accessed directly
-BEHIND_REVERSE_PROXY_WITH_DIRECT_ACCESS = getattr(settings, 'AXES_BEHIND_REVERSE_PROXY_WITH_DIRECT_ACCESS', False)
-
-# if the django app is behind a reverse proxy, look for the ip address using this HTTP header value
-REVERSE_PROXY_HEADER = getattr(settings, 'AXES_REVERSE_PROXY_HEADER', 'HTTP_X_FORWARDED_FOR')
-
-COOLOFF_TIME = getattr(settings, 'AXES_COOLOFF_TIME', None)
-if isinstance(COOLOFF_TIME, int):
-    COOLOFF_TIME = timedelta(hours=COOLOFF_TIME)
-
-LOGGER = getattr(settings, 'AXES_LOGGER', 'axes.watch_login')
-
-LOCKOUT_TEMPLATE = getattr(settings, 'AXES_LOCKOUT_TEMPLATE', None)
-VERBOSE = getattr(settings, 'AXES_VERBOSE', True)
+if isinstance(CONF['COOLOFF_TIME'], int):
+    CONF['COOLOFF_TIME'] = timedelta(hours=CONF['COOLOFF_TIME'])
 
 # whitelist and blacklist
-# todo: convert the strings to IPv4 on startup to avoid type conversion during processing
-ONLY_WHITELIST = getattr(settings, 'AXES_ONLY_ALLOW_WHITELIST', False)
-IP_WHITELIST = getattr(settings, 'AXES_IP_WHITELIST', None)
-IP_BLACKLIST = getattr(settings, 'AXES_IP_BLACKLIST', None)
+IP_WHITELIST = [bl.ip_address for bl in WhitelistedIP.objects.all()]
+IP_BLACKLIST = [bl.ip_address for bl in BlacklistedIP.objects.all()]
 
 ERROR_MESSAGE = ugettext_lazy("Please enter a correct username and password. "
                               "Note that both fields are case-sensitive.")
 
 
-log = logging.getLogger(LOGGER)
-if VERBOSE:
-    log.info('AXES: BEGIN LOG')
-    log.info('Using django-axes ' + axes.get_version())
+LOG = logging.getLogger(CONF['LOGGER'])
+if CONF['VERBOSE']:
+    LOG.info('AXES: BEGIN LOG')
+    LOG.info('Using django-axes ' + axes.get_version())
 
 
-if BEHIND_REVERSE_PROXY:
-    log.debug('Axes is configured to be behind reverse proxy...looking for header value %s', REVERSE_PROXY_HEADER)
+if CONF['BEHIND_REVERSE_PROXY']:
+    LOG.debug('Axes is configured to be behind reverse proxy...looking for header value %s', CONF['REVERSE_PROXY_HEADER'])
 
 
 def get_ip(request):
-    if not BEHIND_REVERSE_PROXY:
+    if not CONF['BEHIND_REVERSE_PROXY']:
         ip = request.META.get('REMOTE_ADDR', '')
     else:
-        ip = request.META.get(REVERSE_PROXY_HEADER, '')
+        ip = request.META.get(CONF['REVERSE_PROXY_HEADER'], '')
         ip = ip.split(",", 1)[0].strip()
         if ip == '':
-            if not BEHIND_REVERSE_PROXY_WITH_DIRECT_ACCESS:
+            if not CONF['BEHIND_REVERSE_PROXY_WITH_DIRECT_ACCESS']:
                 raise Warning('Axes is configured for operation behind a reverse proxy but could not find '\
                     'an HTTP header value {0}. Check your proxy server settings '\
-                    'to make sure this header value is being passed.'.format(REVERSE_PROXY_HEADER))
+                    'to make sure this header value is being passed.'.format(CONF['REVERSE_PROXY_HEADER']))
             else:
                 ip = request.META.get('REMOTE_ADDR', '')
-                if ip not in IP_WHITELIST:
+                if ip not in CONF['IP_WHITELIST']:
                     raise Warning('Axes is configured for operation behind a reverse proxy and to allow some'\
                         'IP addresses to have direct access. {0} is not on the white list'.format(ip))
     return ip
-
-
-def get_lockout_url():
-    return getattr(settings, 'AXES_LOCKOUT_URL', None)
 
 
 def query2str(items):
@@ -172,7 +177,7 @@ def _get_user_attempts(request):
 
     username = request.POST.get('username', None)
 
-    if USE_USER_AGENT:
+    if CONF['USE_USER_AGENT']:
         ua = request.META.get('HTTP_USER_AGENT', '<unknown>')[:255]
         attempts = AccessAttempt.objects.filter(
             user_agent=ua, ip_address=ip, username=username, trusted=True
@@ -184,7 +189,7 @@ def _get_user_attempts(request):
 
     if not attempts:
         params = {'ip_address': ip, 'trusted': False}
-        if USE_USER_AGENT:
+        if CONF['USE_USER_AGENT']:
             params['user_agent'] = ua
 
         attempts = AccessAttempt.objects.filter(**params)
@@ -224,12 +229,12 @@ def watch_login(func):
 
     def decorated_login(request, *args, **kwargs):
         # share some useful information
-        if func.__name__ != 'decorated_login' and VERBOSE:
-            log.info('AXES: Calling decorated function: %s' % func.__name__)
+        if func.__name__ != 'decorated_login' and CONF['VERBOSE']:
+            LOG.info('AXES: Calling decorated function: %s' % func.__name__)
             if args:
-                log.info('args: %s' % str(args))
+                LOG.info('args: %s' % str(args))
             if kwargs:
-                log.info('kwargs: %s' % kwargs)
+                LOG.info('kwargs: %s' % kwargs)
 
         # TODO: create a class to hold the attempts records and perform checks
         # with its methods? or just store attempts=get_user_attempts here and
@@ -283,17 +288,16 @@ def watch_login(func):
 
 
 def lockout_response(request):
-    if LOCKOUT_TEMPLATE:
+    if CONF['LOCKOUT_TEMPLATE']:
         context = {
             'cooloff_time': COOLOFF_TIME,
-            'failure_limit': FAILURE_LIMIT,
+            'failure_limit': CONF['FAILURE_LIMIT'],
         }
-        return render_to_response(LOCKOUT_TEMPLATE, context,
+        return render_to_response(CONF['LOCKOUT_TEMPLATE'], context,
                                   context_instance=RequestContext(request))
 
-    LOCKOUT_URL = get_lockout_url()
-    if LOCKOUT_URL:
-        return HttpResponseRedirect(LOCKOUT_URL)
+    if CONF['LOCKOUT_URL']:
+        return HttpResponseRedirect(CONF['LOCKOUT_URL'])
 
     if COOLOFF_TIME:
         return HttpResponse("Account locked: too many login attempts.  "
@@ -306,7 +310,7 @@ def lockout_response(request):
 def is_already_locked(request):
     ip = get_ip(request)
 
-    if ONLY_WHITELIST:
+    if CONF['ONLY_WHITELIST']:
         if not ip_in_whitelist(ip):
             return True
 
@@ -316,7 +320,7 @@ def is_already_locked(request):
     attempts = get_user_attempts(request)
     user_lockable = is_user_lockable(request)
     for attempt in attempts:
-        if attempt.failures_since_start >= FAILURE_LIMIT and LOCK_OUT_AT_FAILURE and user_lockable:
+        if attempt.failures_since_start >= CONF['FAILURE_LIMIT'] and CONF['LOCK_OUT_AT_FAILURE'] and user_lockable:
             return True
 
     return False
@@ -352,7 +356,7 @@ def check_request(request, login_unsuccessful):
                 attempt.failures_since_start = failures
                 attempt.attempt_time = datetime.now()
                 attempt.save()
-                log.info('AXES: Repeated login failure by %s. Updating access '
+                LOG.info('AXES: Repeated login failure by %s. Updating access '
                          'record. Count = %s' %
                          (attempt.ip_address, failures))
         else:
@@ -375,11 +379,11 @@ def check_request(request, login_unsuccessful):
     user_lockable = is_user_lockable(request)
     # no matter what, we want to lock them out if they're past the number of
     # attempts allowed, unless the user is set to notlockable
-    if failures > FAILURE_LIMIT and LOCK_OUT_AT_FAILURE and user_lockable:
+    if failures > CONF['FAILURE_LIMIT'] and CONF['LOCK_OUT_AT_FAILURE'] and user_lockable:
         # We log them out in case they actually managed to enter the correct
         # password
         logout(request)
-        log.warn('AXES: locked out %s after repeated login attempts.' %
+        LOG.warn('AXES: locked out %s after repeated login attempts.' %
                  (ip_address,))
         # send signal when someone is locked out.
         user_locked_out.send("axes", request=request, username=username, ip_address=ip_address)
@@ -420,7 +424,7 @@ def create_new_failure_records(request, failures):
     })
     AccessAttempt.objects.create(**params)
 
-    log.info('AXES: New login failure by %s. Creating access record.' % (ip,))
+    LOG.info('AXES: New login failure by %s. Creating access record.' % (ip,))
 
 
 def create_new_trusted_record(request):
