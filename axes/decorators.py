@@ -32,7 +32,6 @@ from axes.signals import user_locked_out
 import axes
 from django.utils import six
 
-
 """
 AXES_LOGIN_FAILURE_LIMIT
 AXES_LOCK_OUT_AT_FAILURE
@@ -48,7 +47,7 @@ AXES_ONLY_ALLOW_WHITELIST
 """
 
 CONF = {
-    'LOGIN_FAILURE_LIMIT': 3,
+    'FAILURE_LIMIT': 3,
     'LOCK_OUT_AT_FAILURE': True,
     'LOCKOUT_URL': None,
     'USE_USER_AGENT': False,
@@ -59,11 +58,11 @@ CONF = {
     'LOGGER': 'axes.watch_login',
     'LOCKOUT_TEMPLATE': None,
     'VERBOSE': True,
-    'ONLY_ALLOW_WHITELIST': False,
+    'ONLY_WHITELIST': False,
 }
 
 # Pull config from settings
-CONF.update(getattr(settings, 'AXES_CONFIG', {}))
+CONF.update(getattr(settings, 'AXES_CONF', {}))
 
 if isinstance(CONF['COOLOFF_TIME'], int):
     CONF['COOLOFF_TIME'] = timedelta(hours=CONF['COOLOFF_TIME'])
@@ -204,9 +203,9 @@ def get_user_attempts(request):
     objects_deleted = False
     attempts = _get_user_attempts(request)
 
-    if COOLOFF_TIME:
+    if CONF['COOLOFF_TIME']:
         for attempt in attempts:
-            if attempt.attempt_time + COOLOFF_TIME < datetime.now():
+            if attempt.attempt_time + CONF['COOLOFF_TIME'] < datetime.now():
                 if attempt.trusted:
                     attempt.failures_since_start = 0
                     attempt.save()
@@ -290,7 +289,7 @@ def watch_login(func):
 def lockout_response(request):
     if CONF['LOCKOUT_TEMPLATE']:
         context = {
-            'cooloff_time': COOLOFF_TIME,
+            'cooloff_time': CONF['COOLOFF_TIME'],
             'failure_limit': CONF['FAILURE_LIMIT'],
         }
         return render_to_response(CONF['LOCKOUT_TEMPLATE'], context,
@@ -299,7 +298,7 @@ def lockout_response(request):
     if CONF['LOCKOUT_URL']:
         return HttpResponseRedirect(CONF['LOCKOUT_URL'])
 
-    if COOLOFF_TIME:
+    if CONF['COOLOFF_TIME']:
         return HttpResponse("Account locked: too many login attempts.  "
                             "Please try again later.")
     else:
